@@ -1,0 +1,200 @@
+// import { GoogleGenAI, Type } from "@google/genai";
+// Initialize Gemini Client
+// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const autoGradeSubmission = async (
+  assignmentTitle: string,
+  answerKey: string,
+  submissionImageBase64: string,
+  mimeType: string
+): Promise<{ score: number; feedback: string }> => {
+  try {
+    const model = "gemini-2.5-flash";
+    
+    const prompt = `
+      Bạn là một trợ lý chấm điểm tự động cho giáo viên.
+      
+      Nhiệm vụ:
+      1. Phân tích hình ảnh bài làm của học sinh cho bài tập: "${assignmentTitle}".
+      2. So sánh câu trả lời tìm thấy trong ảnh với Đáp án: "${answerKey}".
+      3. Xác định câu nào đúng và câu nào sai.
+      4. Tính điểm trên thang điểm 10.
+      5. Đưa ra nhận xét ngắn gọn, mang tính xây dựng bằng Tiếng Việt giải thích về số điểm.
+
+      Trả về kết quả dưới dạng JSON.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: {
+        parts: [
+          {
+            text: prompt
+          },
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: submissionImageBase64
+            }
+          }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            score: { type: Type.NUMBER, description: "Điểm số tính toán từ 0-10" },
+            feedback: { type: Type.STRING, description: "Nhận xét cho học sinh bằng tiếng Việt" }
+          },
+          required: ["score", "feedback"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+    
+    return JSON.parse(text);
+
+  } catch (error) {
+    console.error("Auto-grading failed:", error);
+    return {
+      score: 0,
+      feedback: "Chấm điểm tự động thất bại. Vui lòng chấm thủ công."
+    };
+  }
+};
+
+export const generateQuizQuestions = async (topic: string): Promise<{ title: string; description: string; answerKey: string }> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `Tạo một bài kiểm tra trắc nghiệm ngắn (5 câu hỏi) về chủ đề: "${topic}" bằng Tiếng Việt.
+      Trả về một đối tượng JSON gồm tiêu đề (title), mô tả chứa các câu hỏi (description), và chuỗi đáp án (answerKey, ví dụ: '1A, 2B...').`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+                title: { type: Type.STRING },
+                description: { type: Type.STRING },
+                answerKey: { type: Type.STRING }
+            }
+        }
+      }
+    });
+
+    const text = response.text;
+    if(!text) throw new Error("Failed to generate");
+    return JSON.parse(text);
+
+  } catch (error) {
+    console.error("Quiz gen failed", error);
+    return {
+      title: "Lỗi tạo bài tập",
+      description: "Vui lòng thử lại.",
+      answerKey: ""
+    };
+  }
+};
+
+export const extractQuestionsFromImage = async (base64Data: string, mimeType: string = "image/jpeg"): Promise<any[]> => {
+  try {
+    const model = "gemini-2.5-flash";
+    const prompt = `
+      Hãy phân tích hình ảnh đề thi này.
+      1. Đếm số lượng câu hỏi (ví dụ: Câu 1, Câu 2...).
+      2. Trích xuất danh sách các câu hỏi để tạo phiếu trả lời.
+      3. Xác định loại câu hỏi (trắc nghiệm 'choice' hoặc tự luận/điền đáp án 'text').
+      4. Nếu là trắc nghiệm, trích xuất các lựa chọn (A, B, C, D).
+      5. Nếu có thể xác định đáp án đúng (ví dụ được khoanh tròn hoặc đánh dấu), hãy điền vào correctAnswer.
+      
+      Trả về mảng JSON các đối tượng câu hỏi với cấu trúc:
+      {
+        "id": "q1", "q2"...
+        "text": "Câu 1", "Câu 2"...
+        "type": "text" hoặc "choice"
+        "options": ["A", "B", "C", "D"] (nếu type là choice)
+        "correctAnswer": "" (hoặc đáp án nếu thấy)
+      }
+    `;
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mimeType, data: base64Data } }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+             type: Type.OBJECT,
+             properties: {
+                id: { type: Type.STRING },
+                text: { type: Type.STRING },
+                type: { type: Type.STRING, enum: ["text", "choice"] },
+                options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                correctAnswer: { type: Type.STRING }
+             },
+             required: ["id", "text"]
+          }
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) return [];
+    
+    // Post-process to ensure type is set
+    const questions = JSON.parse(text);
+    return questions.map((q: any) => ({
+        ...q,
+        type: q.type || 'text', // Default to text if undefined
+        options: q.options || []
+    }));
+
+  } catch (error) {
+    console.error("Extract questions failed", error);
+    return [];
+  }
+};
+
+export const explainConcept = async (term: string, subjectLabel: string): Promise<string> => {
+  try {
+    const model = "gemini-2.5-flash";
+    // Update context to strictly follow Grade 10 curriculum
+    const context = subjectLabel !== 'Tất cả' 
+      ? `trong chương trình môn ${subjectLabel} Lớp 10 (Sách giáo khoa mới)` 
+      : 'trong bối cảnh chương trình giáo dục phổ thông Lớp 10';
+    
+    const prompt = `
+      Bạn là một từ điển bách khoa toàn thư giáo dục dành cho học sinh Lớp 10.
+      Hãy giải thích khái niệm hoặc trả lời câu hỏi sau: "${term}" ${context}.
+      
+      Cấu trúc câu trả lời (trình bày bằng Markdown):
+      1. **Định nghĩa**: Ngắn gọn, dễ hiểu, bám sát sách giáo khoa Lớp 10.
+      2. **Giải thích chi tiết/Công thức**: 
+         - Nếu là Toán/Lý/Hóa, sử dụng công thức chuẩn LaTeX bao quanh bởi dấu $ (cho công thức trong dòng) hoặc $$ (cho công thức riêng dòng).
+         - Ví dụ vectơ: $$ \\vec{a} + \\vec{b} = \\vec{c} $$
+         - Ví dụ phương trình: $$ x = x_0 + v_0t + \\frac{1}{2}at^2 $$
+      3. **Ví dụ minh họa**: Một ví dụ áp dụng cụ thể ở mức độ Lớp 10.
+      4. **Lưu ý**: Các lỗi thường gặp của học sinh Lớp 10 khi học phần này.
+      
+      Hãy đảm bảo các công thức hiển thị đúng. Giọng văn thân thiện, khuyến khích học tập.
+    `;
+
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+    });
+
+    return response.text || "Xin lỗi, không thể tìm thấy thông tin này.";
+  } catch (error) {
+    console.error("Explain concept failed", error);
+    return "Đã xảy ra lỗi khi tra cứu. Vui lòng thử lại sau.";
+  }
+};
