@@ -1,0 +1,8 @@
+{
+  "name": "EduLite AI",
+  "description": "A lightweight Learning Management System with AI-powered grading and assignment generation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
